@@ -146,9 +146,25 @@ def process_file_in_memory(uploaded_file, tr):
     else:
         raise Exception(f"סוג קובץ לא נתמך: {ext}")
         
+# --- טעינת קוד היעד מתוך ה-Session State ---
+    # נשתמש ב-tr.target_language רק לצורך קוד השפה (en, iw, ru)
+    # נניח ש-target_lang_key מכיל את קוד השפה הנכון
+    # אם זה לא עובד נצטרך להשתמש ב-st.session_state ישירות
+    
+    # מנסה להשתמש בקוד השפה של המתרגם אם זמין, אחרת משתמש בקוד קבוע
+    try:
+        lang_code = tr.target_language # מנסה גישה ישרה (היה שגוי)
+    except:
+        # זה הפתרון הבטוח יותר: קוד היעד הוא מה שעברנו ל-GoogleTranslator
+        # אנחנו יודעים ש-LANGUAGES[st.session_state.target_lang_key] הוא קוד היעד
+        try:
+            lang_code = LANGUAGES[st.session_state.target_lang_key]
+        except:
+            lang_code = 'translated' # קוד ברירת מחדל אם משהו השתבש לגמרי
+    
     # יצירת שם קובץ חדש (שם מקורי + קוד שפה)
     base_name = os.path.splitext(filename)[0]
-    new_filename = f"{base_name}.{tr.target_language}{new_ext}"
+    new_filename = f"{base_name}.{lang_code}{new_ext}" 
     
     return new_filename, translated_buffer
 
@@ -254,3 +270,4 @@ if uploaded_files:
         if errors:
             st.subheader("🛑 סיכום שגיאות")
             st.error("\n".join(errors['שגיאה']))
+
