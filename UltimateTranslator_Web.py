@@ -8,6 +8,7 @@ from pdf2docx import Converter
 import tempfile
 from collections import defaultdict
 import uuid
+import time # הוספת אימפורט ל-time אם נשתמש בו
 
 # --- רשימת שפות ---
 LANGUAGES = {
@@ -18,8 +19,16 @@ LANGUAGES = {
 
 # --- הגדרות דף ---
 st.set_page_config(layout="wide", page_title="Ultimate Translator Web")
-st.title("🌐 Ultimate Translator V5.0 - גרסת ענן")
+st.title("🌐 Ultimate Translator V5.1 - גרסת ענן")
 st.markdown("מעבד קבצים במקביל (SRT, DOCX) וממיר/מתרגם PDF ל-DOCX")
+
+
+# --- ניהול מצב (Session State) לתיקון ה-AttributeError ---
+if 'target_lang_key' not in st.session_state:
+    st.session_state.target_lang_key = 'עברית'
+if 'src_lang_key' not in st.session_state:
+    st.session_state.src_lang_key = 'זיהוי אוטומטי'
+
 
 # --- פונקציות מנוע התרגום (מותאמות לזיכרון) ---
 
@@ -45,7 +54,6 @@ def trans_txt(file_bytes, tr):
         else:
             new_lines.append(line + "\n")
             
-    # שומר ל-BytesIO כדי לשלוח כפלט
     output_buffer = io.BytesIO()
     output_buffer.write("".join(new_lines).encode('utf-8'))
     output_buffer.seek(0)
@@ -82,8 +90,9 @@ def trans_docx(file_bytes, tr):
 def trans_pdf(pdf_bytes, tr):
     """המרת PDF ל-DOCX, תרגום ושמירה"""
     
-    # עבודה בתיקייה זמנית בשרת (חובה ל-pdf2docx)
+    # עבודה בתיקייה זמנית בשרת
     with tempfile.TemporaryDirectory() as temp_dir:
+        # יצירת שמות זמניים מובטחים שאינם מתנגשים
         temp_pdf_path = os.path.join(temp_dir, f"input_{uuid.uuid4().hex[:8]}.pdf")
         temp_docx_path = os.path.join(temp_dir, f"output_{uuid.uuid4().hex[:8]}.docx")
         
@@ -97,7 +106,8 @@ def trans_pdf(pdf_bytes, tr):
             cv.convert(temp_docx_path, start=0, end=None)
             cv.close()
         except Exception as e:
-            raise Exception(f"שגיאת המרה PDF ל-DOCX: {e}")
+            # אם ההמרה נכשלת, מעלים את השגיאה
+            raise Exception(f"שגיאת המרה PDF ל-DOCX (בדוק אם הקובץ תקין): {e}")
             
         # 3. קריאת ה-DOCX הזמני לזיכרון
         with open(temp_docx_path, 'rb') as f:
@@ -114,18 +124,23 @@ def process_file_in_memory(uploaded_file, tr):
     
     filename = uploaded_file.name
     ext = os.path.splitext(filename)[1].lower()
-    file_bytes = uploaded_file
+    
+    # חובה לאתחל את המצביע לראש הקובץ לפני כל קריאה!
+    uploaded_file.seek(0) 
+    
+    # מכיוון ש-uploaded_file הוא כבר אובייקט BytesIO, נשתמש בו
+    file_bytes_to_process = uploaded_file
     
     if ext in ['.vtt', '.srt']:
-        translated_buffer = trans_txt(file_bytes, tr)
+        translated_buffer = trans_txt(file_bytes_to_process, tr)
         new_ext = ext
         
     elif ext == '.docx':
-        translated_buffer = trans_docx(file_bytes, tr)
+        translated_buffer = trans_docx(file_bytes_to_process, tr)
         new_ext = '.docx'
         
     elif ext == '.pdf':
-        translated_buffer = trans_pdf(file_bytes, tr)
+        translated_buffer = trans_pdf(file_bytes_to_process, tr)
         new_ext = '.docx' # פלט PDF הוא תמיד DOCX
         
     else:
@@ -143,11 +158,27 @@ with st.sidebar:
     st.header("1. הגדרות שפה")
     col_src, col_target = st.columns(2)
     
-    with col_src:
-        src_lang = st.selectbox("שפת מקור:", ['זיהוי אוטומטי'] + list(LANGUAGES.keys()), index=0)
+    # ----------------------------------------------------
+    # תיקון ה-AttributeError על ידי שימוש ב-Session State
+    # ----------------------------------------------------
     
+    # 1. שפת מקור
+    with col_src:
+        src_lang = st.selectbox(
+            "מקור:", 
+            ['זיהוי אוטומטי'] + list(LANGUAGES.keys()), 
+            index=(['זיהוי אוטומטי'] + list(LANGUAGES.keys())).index(st.session_state.src_lang_key),
+            key='src_lang_key'
+        )
+    
+    # 2. שפת יעד (משתמש בערך ברירת המחדל עברית)
     with col_target:
-        target_lang = st.selectbox("שפת יעד:", list(LANGUAGES.keys()), index=LANGUAGES.keys().index('עברית'))
+        target_lang = st.selectbox(
+            "יעד:", 
+            list(LANGUAGES.keys()), 
+            index=list(LANGUAGES.keys()).index(st.session_state.target_lang_key),
+            key='target_lang_key'
+        )
         
     st.header("2. קבצים")
     uploaded_files = st.file_uploader(
@@ -157,26 +188,29 @@ with st.sidebar:
     )
     
     if len(uploaded_files) > 0:
-        st.info(f"סה\"כ {len(uploaded_files)} קבצים מוכנים.")
+        st.info(f"סה\"כ {len(uploaded_files)} קבצים מוכנים לעיבוד.")
+
+
+# --- כפתור הפעלה ראשי ---
 
 if uploaded_files:
     
     if st.button("🚀 התחל תרגום קבצים"):
         
-        if src_lang == 'זיהוי אוטומטי':
+        # המרת בחירת השפה לקוד שפה בינלאומי
+        if st.session_state.src_lang_key == 'זיהוי אוטומטי':
             src_code = 'auto'
         else:
-            src_code = LANGUAGES[src_lang]
+            src_code = LANGUAGES[st.session_state.src_lang_key]
             
-        target_code = LANGUAGES[target_lang]
+        target_code = LANGUAGES[st.session_state.target_lang_key]
         
-        # אתחול מתרגם
+        # אתחול מתרגם (מוטמן ב-cache)
         tr = get_translator(src_code, target_code)
         
         st.subheader("🚧 סטטוס עיבוד")
         progress_bar = st.progress(0, text="מתחיל...")
         
-        # משתנים לאחסון התוצאות
         translated_files = []
         errors = defaultdict(list)
         
@@ -184,10 +218,7 @@ if uploaded_files:
             file_name = file.name
             
             try:
-                # Streamlit קורא את הקובץ לזיכרון וסוגר אותו, צריך לקרוא אותו שוב
-                file.seek(0)
-                
-                # העיבוד בפועל
+                # העיבוד בפועל בזיכרון
                 new_filename, buffer = process_file_in_memory(file, tr)
                 translated_files.append((new_filename, buffer))
                 st.success(f"✅ הושלם: {file_name} -> {new_filename}")
@@ -209,7 +240,6 @@ if uploaded_files:
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
                 for new_name, buffer in translated_files:
-                    # שימוש ב-buffer.getvalue() כדי לקבל את ה-bytes
                     zip_file.writestr(new_name, buffer.getvalue())
             
             zip_buffer.seek(0)
@@ -217,7 +247,7 @@ if uploaded_files:
             st.download_button(
                 label=f"הורד את כל {len(translated_files)} הקבצים (ZIP)",
                 data=zip_buffer,
-                file_name=f"Translated_Files_{target_code}.zip",
+                file_name=f"Translated_Files_{target_code}_{time.strftime('%Y%m%d_%H%M%S')}.zip",
                 mime="application/zip"
             )
 
